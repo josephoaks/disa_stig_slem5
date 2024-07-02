@@ -1557,6 +1557,536 @@ disable_wireless_interfaces() {
     done
 }
 
+# Function to prevent USB mass storage devices from automounting
+prevent_usb_automount() {
+    local function_name="prevent_usb_automount"
+    local vuln_id="V-261347"
+    local rule_id="SV-261347r996498"
+
+    local modprobe_conf_file="/etc/modprobe.d/50-blacklist.conf"
+    local blacklist_usb="blacklist usb-storage"
+
+    if grep -q "^blacklist usb-storage" "$modprobe_conf_file"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "USB mass storage automounting already prevented."
+    else
+        echo "$blacklist_usb" | sudo tee -a "$modprobe_conf_file"
+
+        if grep -q "^blacklist usb-storage" "$modprobe_conf_file"; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "USB mass storage automounting prevented successfully."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to prevent USB mass storage automounting. This is a finding."
+        fi
+    fi
+}
+
+# Function to assign home directories to new local interactive users
+assign_home_directories_new_users() {
+    local function_name="assign_home_directories_new_users"
+    local vuln_id="V-261348"
+    local rule_id="SV-261348r996500"
+
+    local login_defs_file="/etc/login.defs"
+    local create_home="CREATE_HOME yes"
+
+    if grep -q "^CREATE_HOME" "$login_defs_file"; then
+        sudo sed -i 's/^CREATE_HOME.*/'"$create_home"'/' "$login_defs_file"
+    else
+        echo "$create_home" | sudo tee -a "$login_defs_file"
+    fi
+
+    if grep -q "^CREATE_HOME yes" "$login_defs_file"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Home directories will be assigned to new local interactive users."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure home directory creation for new users. This is a finding."
+    fi
+}
+
+# Function to define default permissions for authenticated users
+define_default_permissions() {
+    local function_name="define_default_permissions"
+    local vuln_id="V-261349"
+    local rule_id="SV-261349r996502"
+
+    local login_defs_file="/etc/login.defs"
+    local umask_setting="UMASK 077"
+
+    if grep -q "^UMASK" "$login_defs_file"; then
+        sudo sed -i 's/^UMASK.*/'"$umask_setting"'/' "$login_defs_file"
+    else
+        echo "$umask_setting" | sudo tee -a "$login_defs_file"
+    fi
+
+    if grep -q "^UMASK 077" "$login_defs_file"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Default permissions for authenticated users defined successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to define default permissions for authenticated users. This is a finding."
+    fi
+}
+
+# Function to enforce a delay between logon prompts
+enforce_logon_delay() {
+    local function_name="enforce_logon_delay"
+    local vuln_id="V-261350"
+    local rule_id="SV-261350r996504"
+
+    local login_defs_file="/etc/login.defs"
+    local fail_delay="FAIL_DELAY 5"
+
+    if grep -q "^FAIL_DELAY" "$login_defs_file"; then
+        sudo sed -i 's/^FAIL_DELAY.*/'"$fail_delay"'/' "$login_defs_file"
+    else
+        echo "$fail_delay" | sudo tee -a "$login_defs_file"
+    fi
+
+    if grep -q "^FAIL_DELAY 5" "$login_defs_file"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Delay between logon prompts enforced successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to enforce delay between logon prompts. This is a finding."
+    fi
+}
+
+# Function to assign home directories to existing local interactive users
+assign_home_directories_existing_users() {
+    local function_name="assign_home_directories_existing_users"
+    local vuln_id="V-261351"
+    local rule_id="SV-261351r996506"
+
+    local users_without_home
+    users_without_home=$(awk -F: '($3 >= 1000 && $7 != "/sbin/nologin" && $7 != "/bin/false" && !system("test -d "$6)) {print $1}' /etc/passwd)
+
+    for user in $users_without_home; do
+        local home_dir="/home/$user"
+        sudo mkdir -p "$home_dir"
+        sudo usermod -d "$home_dir" "$user"
+        sudo chown "$user:$user" "$home_dir"
+
+        if [[ -d "$home_dir" ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Home directory $home_dir assigned to user $user."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to assign home directory $home_dir to user $user. This is a finding."
+        fi
+    done
+}
+
+# Function to create home directories for local interactive users
+create_home_directories() {
+    local function_name="create_home_directories"
+    local vuln_id="V-261352"
+    local rule_id="SV-261352r996862"
+
+    local users_without_home
+    users_without_home=$(awk -F: '($3 >= 1000 && $7 != "/sbin/nologin" && $7 != "/bin/false" && !system("test -d "$6)) {print $1 ":" $6 ":" $4}' /etc/passwd)
+
+    for user_info in $users_without_home; do
+        local user
+        local home_dir
+        local group
+        IFS=: read -r user home_dir group <<< "$user_info"
+
+        sudo mkdir -p "$home_dir"
+        sudo chown "$user" "$home_dir"
+        sudo chgrp "$group" "$home_dir"
+        sudo chmod 0750 "$home_dir"
+
+        if [[ -d "$home_dir" ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Home directory $home_dir created for user $user."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to create home directory $home_dir for user $user. This is a finding."
+        fi
+    done
+}
+
+# Function to edit local interactive user initialization files to change any PATH variable statements
+edit_user_init_files() {
+    local function_name="edit_user_init_files"
+    local vuln_id="V-261353"
+    local rule_id="SV-261353r996512"
+
+    local user_home_dirs
+    user_home_dirs=$(awk -F: '($3 >= 1000 && $7 != "/sbin/nologin" && $7 != "/bin/false") {print $6}' /etc/passwd)
+
+    for home_dir in $user_home_dirs; do
+        local init_files
+        init_files=$(find "$home_dir" -maxdepth 1 -name ".*" -type f)
+
+        for init_file in $init_files; do
+            if grep -q "PATH=" "$init_file"; then
+                sudo sed -i '/PATH=/s|:[^:]*/[^:]||g' "$init_file"
+                log_message "$function_name" "$vuln_id" "$rule_id" "Edited PATH variable in $init_file for user in $home_dir."
+            fi
+        done
+    done
+}
+
+# Function to remove world-writable permissions or references in init scripts
+remove_world_writable_permissions() {
+    local function_name="remove_world_writable_permissions"
+    local vuln_id="V-261354"
+    local rule_id="SV-261354r996514"
+
+    local user_home_dirs
+    user_home_dirs=$(awk -F: '($3 >= 1000 && $7 != "/sbin/nologin" && $7 != "/bin/false") {print $6}' /etc/passwd)
+
+    for home_dir in $user_home_dirs; do
+        local init_files
+        init_files=$(find "$home_dir" -maxdepth 1 -name ".*" -type f)
+
+        for init_file in $init_files; do
+            if grep -q ":[^:]*/[^:]*" "$init_file"; then
+                sudo sed -i '/[^:]* /d' "$init_file"
+                log_message "$function_name" "$vuln_id" "$rule_id" "Removed references to world-writable files in $init_file for user in $home_dir."
+            fi
+        done
+    done
+}
+
+# Function to expire temporary accounts after 72 hours
+expire_temporary_accounts() {
+    local function_name="expire_temporary_accounts"
+    local vuln_id="V-261355"
+    local rule_id="SV-261355r996516"
+
+    local temporary_accounts
+    temporary_accounts=$(awk -F: '($3 >= 1000 && $7 != "/sbin/nologin" && $7 != "/bin/false") {print $1}' /etc/passwd)
+
+    for account in $temporary_accounts; do
+        sudo chage -E "$(date -d +3days +%Y-%m-%d)" "$account"
+
+        if [[ $? -eq 0 ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Temporary account $account set to expire in 72 hours."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set expiration for temporary account $account. This is a finding."
+        fi
+    done
+}
+
+# Function to never automatically remove or disable emergency administrator accounts
+configure_emergency_admin_accounts() {
+    local function_name="configure_emergency_admin_accounts"
+    local vuln_id="V-261356"
+    local rule_id="SV-261356r996518"
+
+    local emergency_accounts
+    emergency_accounts=$(awk -F: '($3 >= 1000 && $7 != "/sbin/nologin" && $7 != "/bin/false") {print $1}' /etc/passwd)
+
+    for account in $emergency_accounts; do
+        sudo chage -I -1 -M 99999 "$account"
+
+        if [[ $? -eq 0 ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Emergency administrator account $account configured not to expire."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure emergency administrator account $account. This is a finding."
+        fi
+    done
+}
+
+# Function to ensure all accounts are assigned to an active system, application, or user account
+assign_accounts_to_active_entities() {
+    local function_name="assign_accounts_to_active_entities"
+    local vuln_id="V-261357"
+    local rule_id="SV-261357r996521"
+
+    local inactive_accounts
+    inactive_accounts=$(awk -F: '($3 >= 1000 && $7 != "/sbin/nologin" && $7 != "/bin/false") {print $1}' /etc/passwd)
+
+    for account in $inactive_accounts; do
+        sudo userdel "$account"
+
+        if [[ $? -eq 0 ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Inactive account $account removed successfully."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to remove inactive account $account. This is a finding."
+        fi
+    done
+}
+
+# Function to disable interactive shell for noninteractive accounts
+disable_interactive_shell_noninteractive_accounts() {
+    local function_name="disable_interactive_shell_noninteractive_accounts"
+    local vuln_id="V-261358"
+    local rule_id="SV-261358r996829"
+
+    local noninteractive_accounts
+    noninteractive_accounts=$(awk -F: '($3 >= 1000 && $7 == "/bin/bash") {print $1}' /etc/passwd)
+
+    for account in $noninteractive_accounts; do
+        sudo usermod --shell /sbin/nologin "$account"
+
+        if [[ $? -eq 0 ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Interactive shell disabled for noninteractive account $account."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable interactive shell for noninteractive account $account. This is a finding."
+        fi
+    done
+}
+
+# Function to disable account identifiers after 35 days of inactivity
+disable_inactive_accounts() {
+    local function_name="disable_inactive_accounts"
+    local vuln_id="V-261360"
+    local rule_id="SV-261360r996529"
+
+    sudo useradd -D -f 35
+
+    local inactive_days
+    inactive_days=$(useradd -D | grep INACTIVE | awk -F= '{print $2}')
+
+    if [[ "$inactive_days" -eq 35 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Configured to disable account identifiers after 35 days of inactivity successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure disabling of account identifiers after 35 days of inactivity. This is a finding."
+    fi
+}
+
+# Function to ensure no duplicate UIDs for interactive users
+ensure_unique_uids() {
+    local function_name="ensure_unique_uids"
+    local vuln_id="V-261361"
+    local rule_id="SV-261361r996530"
+
+    local duplicate_uids
+    duplicate_uids=$(awk -F: '($3 >= 1000) {print $3}' /etc/passwd | sort | uniq -d)
+
+    if [[ -n "$duplicate_uids" ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Found duplicate UIDs: $duplicate_uids. Manual intervention required to resolve."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "No duplicate UIDs found for interactive users."
+    fi
+}
+
+# Function to provide users with feedback on last account access
+configure_pam_lastlog() {
+    local function_name="configure_pam_lastlog"
+    local vuln_id="V-261362"
+    local rule_id="SV-261362r996533"
+
+    local pam_login_file="/etc/pam.d/login"
+    local pam_lastlog="session required pam_lastlog.so showfailed"
+
+    if grep -q "^session.*pam_lastlog.so.*showfailed" "$pam_login_file"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "pam_lastlog.so is already configured in $pam_login_file."
+    else
+        sudo sed -i "1s/^/$pam_lastlog\n/" "$pam_login_file"
+        log_message "$function_name" "$vuln_id" "$rule_id" "Configured pam_lastlog.so in $pam_login_file."
+    fi
+}
+
+# Function to initiate session lock after 15 minutes of inactivity
+configure_autologout() {
+    local function_name="configure_autologout"
+    local vuln_id="V-261363"
+    local rule_id="SV-261363r996536"
+
+    local autologout_file="/etc/profile.d/autologout.sh"
+
+    echo "TMOUT=900" | sudo tee "$autologout_file"
+    echo "readonly TMOUT" | sudo tee -a "$autologout_file"
+    echo "export TMOUT" | sudo tee -a "$autologout_file"
+    sudo chmod +x "$autologout_file"
+
+    if [[ -f "$autologout_file" ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Configured autologout after 15 minutes of inactivity."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure autologout. This is a finding."
+    fi
+}
+
+# Function to lock account after three unsuccessful access attempts
+configure_pam_tally2() {
+    local function_name="configure_pam_tally2"
+    local vuln_id="V-261364"
+    local rule_id="SV-261364r996863"
+
+    local common_auth_file="/etc/pam.d/common-auth"
+    local common_account_file="/etc/pam.d/common-account"
+
+    sudo sed -i '/pam_tally2.so/d' "$common_auth_file"
+    sudo sed -i '/pam_tally2.so/d' "$common_account_file"
+
+    echo "auth required pam_tally2.so onerr=fail silent audit deny=3" | sudo tee -a "$common_auth_file"
+    echo "account required pam_tally2.so" | sudo tee -a "$common_account_file"
+
+    if grep -q "pam_tally2.so" "$common_auth_file" && grep -q "pam_tally2.so" "$common_account_file"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Configured pam_tally2.so to lock accounts after three unsuccessful attempts."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure pam_tally2.so. This is a finding."
+    fi
+}
+
+# Function to enforce a delay between logon prompts following a failed logon attempt
+configure_logon_delay() {
+    local function_name="configure_logon_delay"
+    local vuln_id="V-261365"
+    local rule_id="SV-261365r996541"
+
+    local common_auth_file="/etc/pam.d/common-auth"
+    local faildelay_config="auth required pam_faildelay.so delay=5000000"
+
+    if grep -q "^auth.*pam_faildelay.so" "$common_auth_file"; then
+        sudo sed -i 's|^auth.*pam_faildelay.so.*|'"$faildelay_config"'|' "$common_auth_file"
+    else
+        echo "$faildelay_config" | sudo tee -a "$common_auth_file"
+    fi
+
+    if grep -q "^auth.*pam_faildelay.so.*delay=5000000" "$common_auth_file"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Configured delay between logon prompts successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure delay between logon prompts. This is a finding."
+    fi
+}
+
+# Function to configure SLEM 5 to use the default pam_tally2 tally directory while SELinux enforces a targeted policy
+configure_pam_tally2_directory() {
+    local function_name="configure_pam_tally2_directory"
+    local vuln_id="V-261366"
+    local rule_id="SV-261366r996837"
+
+    local pam_login_file="/etc/pam.d/login"
+
+    # Remove non-default tally directory configuration
+    sudo sed -ri 's/\s+file=\S+\s+/ /g' "$pam_login_file"
+
+    # Update SELinux context type for the default pam_tally2 tally directory
+    sudo semanage fcontext -a -t tallylog_t "/var/log/tallylog"
+    sudo restorecon -R -v /var/log/tallylog
+
+    # Verify SELinux context
+    local selinux_context
+    selinux_context=$(ls -Z /var/log/tallylog | awk '{print $3}')
+
+    if [[ "$selinux_context" == "tallylog_t" ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Configured default pam_tally2 tally directory successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure default pam_tally2 tally directory. This is a finding."
+    fi
+}
+
+# Function to configure SLEM 5 to verify correct operation of all security functions
+configure_selinux_targeted_policy() {
+    local function_name="configure_selinux_targeted_policy"
+    local vuln_id="V-261370"
+    local rule_id="SV-261370r996551"
+
+    local selinux_config_file="/etc/selinux/config"
+    local selinux_type_config="SELINUXTYPE=targeted"
+
+    if grep -q "^SELINUXTYPE" "$selinux_config_file"; then
+        sudo sed -i 's|^SELINUXTYPE=.*|'"$selinux_type_config"'|' "$selinux_config_file"
+    else
+        echo "$selinux_type_config" | sudo tee -a "$selinux_config_file"
+    fi
+
+    if grep -q "^SELINUXTYPE=targeted" "$selinux_config_file"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Configured SELINUXTYPE to targeted successfully. A reboot is required."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure SELINUXTYPE to targeted. This is a finding."
+    fi
+}
+
+# Function to map users to specific SELinux roles
+###############################################################
+#
+# Example usage: map_user_to_selinux_role "username" "sysadm_u"
+#
+###############################################################
+map_user_to_selinux_role() {
+    local function_name="map_user_to_selinux_role"
+    local vuln_id="V-261371"
+    local rule_id="SV-261371r996554"
+    local username="$1"
+    local role="$2"
+
+    sudo semanage login -m -s "$role" "$username"
+
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Mapped user $username to SELinux role $role successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to map user $username to SELinux role $role. This is a finding."
+    fi
+}
+
+# Function to define defaults in the sudoers file
+configure_sudoers_defaults() {
+    local function_name="configure_sudoers_defaults"
+    local vuln_id="V-261372"
+    local rule_id="SV-261372r996556"
+
+    local sudoers_file="/etc/sudoers"
+    local defaults="Defaults !targetpw\nDefaults !rootpw\nDefaults !runaspw"
+
+    if ! grep -q "!targetpw" "$sudoers_file"; then
+        echo -e "$defaults" | sudo tee -a "$sudoers_file"
+        log_message "$function_name" "$vuln_id" "$rule_id" "Configured sudoers defaults."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Sudoers defaults already configured."
+    fi
+}
+
+# Function to remove NOPASSWD or !authenticate from sudoers
+remove_nopasswd_from_sudoers() {
+    local function_name="remove_nopasswd_from_sudoers"
+    local vuln_id="V-261373"
+    local rule_id="SV-261373r996558"
+
+    local sudoers_file="/etc/sudoers"
+    
+    sudo sed -i '/NOPASSWD/d' "$sudoers_file"
+    sudo sed -i '/!authenticate/d' "$sudoers_file"
+
+    if ! grep -q "NOPASSWD" "$sudoers_file" && ! grep -q "!authenticate" "$sudoers_file"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Removed NOPASSWD and !authenticate from sudoers."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to remove NOPASSWD or !authenticate from sudoers. This is a finding."
+    fi
+}
+
+# Function to require reauthentication for sudo command
+#########################################################
+#
+# sudo reauthentication with a timeout value of 5 minutes
+# Example usage: require_sudo_reauthentication 5
+#
+#########################################################
+require_sudo_reauthentication() {
+    local function_name="require_sudo_reauthentication"
+    local vuln_id="V-261374"
+    local rule_id="SV-261374r996560"
+    local timeout_value="$1"
+
+    local sudoers_file="/etc/sudoers"
+    local timeout_config="Defaults timestamp_timeout=$timeout_value"
+
+    if grep -q "^Defaults.*timestamp_timeout" "$sudoers_file"; then
+        sudo sed -i 's/^Defaults.*timestamp_timeout.*/'"$timeout_config"'/' "$sudoers_file"
+    else
+        echo "$timeout_config" | sudo tee -a "$sudoers_file"
+    fi
+
+    if grep -q "^Defaults.*timestamp_timeout=$timeout_value" "$sudoers_file"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Configured sudo to require reauthentication with timestamp timeout of $timeout_value."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure sudo reauthentication. This is a finding."
+    fi
+}
+
+# Function to remove specific entries from the sudoers file
+remove_specific_sudoers_entries() {
+    local function_name="remove_specific_sudoers_entries"
+    local vuln_id="V-261375"
+    local rule_id="SV-261375r996562"
+
+    local sudoers_file="/etc/sudoers"
+
+    sudo sed -i '/ALL\s\+ALL=(ALL)\s\+ALL/d' "$sudoers_file"
+    sudo sed -i '/ALL\s\+ALL=(ALL:ALL)\s\+ALL/d' "$sudoers_file"
+
+    if ! grep -q 'ALL\s\+ALL=(ALL)\s\+ALL' "$sudoers_file" && ! grep -q 'ALL\s\+ALL=(ALL:ALL)\s\+ALL' "$sudoers_file"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Removed specified entries from sudoers."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to remove specified entries from sudoers. This is a finding."
+    fi
+}
+
 # Example of calling the new function
 configure_logon_banner
 restrict_kernel_message_buffer
@@ -1622,3 +2152,28 @@ disable_known_hosts_authentication
 enable_strict_modes
 create_ssh_key_pair_with_passphrase
 disable_wireless_interfaces
+prevent_usb_automount
+assign_home_directories_new_users
+define_default_permissions
+enforce_logon_delay
+assign_home_directories_existing_users
+create_home_directories
+edit_user_init_files
+remove_world_writable_permissions
+expire_temporary_accounts
+configure_emergency_admin_accounts
+assign_accounts_to_active_entities
+disable_interactive_shell_noninteractive_accounts
+disable_inactive_accounts
+ensure_unique_uids
+configure_pam_lastlog
+configure_autologout
+configure_pam_tally2
+configure_logon_delay
+configure_pam_tally2_directory
+configure_selinux_targeted_policy
+# map_user_to_selinux_role
+configure_sudoers_defaults
+remove_nopasswd_from_sudoers
+# require_sudo_reauthentication
+remove_specific_sudoers_entries
